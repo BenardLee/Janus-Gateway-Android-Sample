@@ -12,7 +12,6 @@ import android.widget.Spinner;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.ToggleButton;
-import org.json.JSONException;
 import org.json.JSONObject;
 import org.webrtc.AudioSource;
 import org.webrtc.AudioTrack;
@@ -26,7 +25,6 @@ import org.webrtc.RtpReceiver;
 import org.webrtc.SdpObserver;
 import org.webrtc.SessionDescription;
 
-import java.net.URI;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -37,12 +35,9 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import de.tavendo.autobahn.WebSocket;
-import de.tavendo.autobahn.WebSocketConnection;
-import de.tavendo.autobahn.WebSocketOptions;
-
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends AppCompatActivity implements JanusProtocolCallback {
     private final String TAG="MainActivity";
+    private JanusProtocol mJanusProtocol;
 
     //UI Components
     private ToggleButton mConnectButton;
@@ -62,17 +57,10 @@ public class MainActivity extends AppCompatActivity {
     private ToggleButton mSPKSwitch;
     private String mPreferAudioCodec;
 
-    //private LinkedList<IceCandidate> queuedRemoteCandidates;
-    //private LinkedList<IceCandidate> queuedLocalCandidates;
-
     private ConcurrentLinkedQueue<IceCandidate> queuedRemoteCandidates;
-    private ConcurrentLinkedQueue<IceCandidate> queuedLocalCandidates;
 
     //Audio Configurations
-    private WebSocketConnection mConnection=new WebSocketConnection();
-    private WebSocketObserver mWSObserver=new WebSocketObserver();
     private final String wsuri="ws://192.168.0.55:8888/janus";
-    private String mWSStatus="NOT_CONNECTED";
     private SDPObserver mSDPObserver;
     private PCObserver mPCObserver;
     private boolean mModAudioPrefer=false;
@@ -112,13 +100,11 @@ public class MainActivity extends AppCompatActivity {
 
     private TimerTask mTimerTask;
     private Timer mTimer;
-    private boolean mOfferReceived=false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
 
         super.onCreate(savedInstanceState);
-
         setContentView(R.layout.activity_main);
 
         //1. Setup UI Components
@@ -126,13 +112,12 @@ public class MainActivity extends AppCompatActivity {
         mConnectButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                Log.d(TAG,"Button Status:"+mConnectButton.isChecked());
-                //Disconnect WebSocket
                 if(mConnectButton.isChecked()){
-                    connectWS(wsuri);
+                    Log.d(TAG,"1. connect websocket server addr:"+wsuri);
+                    mJanusProtocol.connect(wsuri);
                 } else {
-                    if(mWSStatus.equals("CONNECTED")) {
-                        disconnectWS();
+                    if(mJanusProtocol.isConnected()) {
+                        mJanusProtocol.disconnect();
                         mConnectButton.setChecked(false);
                     }
                 }
@@ -142,46 +127,15 @@ public class MainActivity extends AppCompatActivity {
         mStartButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                try{
-                    //Step 1. Send Session Create Request
-                    if(mWSStatus.equals("CONNECTED")){
-                        String requestTransaction=getTrxId();
-                        JSONObject request=new JSONObject();
-                        request.put("janus","create");
-                        request.put("transaction",requestTransaction);
-                        mTransactionQueue.put(requestTransaction,"CREATE_SESSION");
-                        Log.d(TAG,"[JANUS] M>J Send Create Session Msg:"+request.toString());
-                        mConnection.sendTextMessage(request.toString());
-                    }
-                } catch (Exception e) {
-                    Log.d(TAG, "Send Msg Error");
-                }
+                Log.d(TAG,"2. create session_id");
+                mJanusProtocol.createSession();
             }
         });
         mStopButton=(Button)findViewById(R.id.stoptButton);
-
         mStopButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                if(mWSStatus.equals("CONNECTED")) {
-                    JSONObject json=new JSONObject();
-                    try {
-                        //[Destroy Janus Session]
-                        json.put("janus","destroy");
-                        json.put("transaction",getTrxId());
-                        json.put("session_id",mJanusSessionId);
-                        mConnection.sendTextMessage(json.toString());
-                        mPeerConnection.close();
-                        mPeerConnection=null;
-                        //this is for reserving local Ice Candidate before answer received.
-                        mOfferReceived=false;
-                        disconnectWS();
-                        mConnectButton.setChecked(false);
-                        stopAudio();
-                    } catch (JSONException e) {
-                        e.printStackTrace();
-                    }
-                }
+                mJanusProtocol.destroySession();
             }
         });
         mCodecSpinner=(Spinner)findViewById(R.id.codecSpinner);
@@ -283,6 +237,9 @@ public class MainActivity extends AppCompatActivity {
         PeerConnectionFactory.Options options = new PeerConnectionFactory.Options();
         options.networkIgnoreMask = 0;
         mPeerConnectionFactory=new PeerConnectionFactory(options);
+
+        //Create JanusProtocol Object
+        mJanusProtocol=new JanusProtocol(this);
     }
 
 
@@ -317,7 +274,6 @@ public class MainActivity extends AppCompatActivity {
     private void createPeerConnection(){
         Log.d(TAG, "Create PeerConnection...");
         queuedRemoteCandidates = new ConcurrentLinkedQueue<>();
-        queuedLocalCandidates = new ConcurrentLinkedQueue<IceCandidate>();
         //Set Turn Server
         iceServers.add(new PeerConnection.IceServer("turn:172.19.136.204:3478","testusr","test123"));
         PeerConnection.RTCConfiguration rtcConfig = new PeerConnection.RTCConfiguration(iceServers);
@@ -362,224 +318,72 @@ public class MainActivity extends AppCompatActivity {
 
     }
 
-    private boolean connectWS(String uri){
-        try{
-            WebSocketOptions webSocketOptions = new WebSocketOptions();
-            mConnection.connect(new URI(uri),new String[]{"janus-protocol"},mWSObserver,webSocketOptions);
-        } catch (Exception e){
-            Log.d(TAG,"Exception:connectWS:Conneceting To WS Error:"+e.getMessage());
-            return false;
-        }
-        return true;
+    //this is for implementing janusprotocolcallback
+    @Override
+    public void onOpened(boolean isSuccess, Exception ex) {
+
     }
 
-    private void disconnectWS(){
-        Log.d(TAG, "disconnect Websocket");
-        mConnection.disconnect();
-        mWSStatus="NOT_CONNECTED";
+    @Override
+    public void onClosed(String msg) {
+
     }
 
-    private boolean sendWSMsg(JSONObject sendMsgJson){
-        if(mWSStatus.equals("CONNECTED")){
-            Log.d(TAG,"send Websocket data:"+sendMsgJson.toString());
-            mConnection.sendTextMessage(sendMsgJson.toString());
-            return true;
-        } else return false;
+    @Override
+    public void onCreateSessionReply(boolean isSuccess, Exception ex) {
+        if(isSuccess){
+            Log.d(TAG,"3. attach plugin");
+            mJanusProtocol.attachPlugin("janus.plugin.audiobridge","test-janusaudioplugin");
+        }
     }
 
-    private class WebSocketObserver implements WebSocket.WebSocketConnectionObserver {
-        @Override
-        public void onOpen() {
-            Log.d(TAG, "WebSocket connection opened to:");
-            mWSStatus="CONNECTED";
-            mConnectButton.setChecked(true);
-        }
-
-        @Override
-        public void onClose(WebSocket.WebSocketConnectionObserver.WebSocketCloseNotification code, String reason) {
-            Log.d(TAG, "WebSocket connection closed. Code: " + code + ". Reason: " + reason );
-        }
-
-        @Override
-        public void onTextMessage(String payload) {
-            Log.d(TAG, "[JANUS] J > M " + payload);
-            try {
-                JSONObject json = new JSONObject(payload);
-                //Send 한 결과에 대한 Response
-                if(json.has("transaction")){
-                    String recvTransactionId=json.getString("transaction");
-                    String sendTransactionOrder=mTransactionQueue.get(recvTransactionId);
-                    boolean trxRemoveFlag=true;
-                    if(sendTransactionOrder.equals("CREATE_SESSION")){
-                        //Create Session에 대한 Response 처리
-                        if(json.getString("janus").equals("success")){
-                            JSONObject data=json.getJSONObject("data");
-                            //성공 결과로 넘겨지는 id 값이 세션id 임
-                            mJanusSessionId=data.getLong("id");
-                            JSONObject request=new JSONObject();
-                            String attachTransaction=getTrxId();
-                            //Step 2. 해당 세션 값을 가지고 audiobridge에 Attach
-                            request.put("janus","attach");
-                            request.put("transaction",attachTransaction);
-                            request.put("opaqueId",mOpaqueId);
-                            request.put("session_id",mJanusSessionId);
-                            request.put("plugin","janus.plugin.audiobridge");
-                            mTransactionQueue.put(attachTransaction,"ATTACH_PLUGIN");
-                            mConnection.sendTextMessage(request.toString());
-                            Log.d(TAG,"[JANUS] Send Attach audiobridgeplugin Msg:"+request.toString());
-                        } else {
-                            //실패..
-                            Log.d(TAG,"[JANUS] CREATE_SESSION Fail");
-                        }
-                    } else if(sendTransactionOrder.equals("ATTACH_PLUGIN")){
-                        //Attach Plugin에 대한 Response 처리
-                        if(json.getString("janus").equals("success")){
-                            JSONObject data=json.getJSONObject("data");
-                            //성공 결과로 넘겨지는 id값이 핸들 id 임
-                            mJanusHandleId=data.getLong("id");
-                            //Step 3. 해당 핸들 값을 가지고 대상 Room에 Join
-                            JSONObject request=new JSONObject();
-                            String joinTransaction=getTrxId();
-                            request.put("janus","message");
-                            request.put("transaction",joinTransaction);
-                            request.put("session_id",mJanusSessionId);
-                            request.put("handle_id",mJanusHandleId);
-                            JSONObject body=new JSONObject();
-                            body.put("request","join");
-                            int roomId=Integer.parseInt(mRoomIdText.getText().toString());
-                            Log.d(TAG,"Join RoomId:"+roomId);
-                            body.put("room",roomId);
-                            body.put("display",getTrxId());
-                            request.put("body",body);
-                            mTransactionQueue.put(joinTransaction,"JOIN_ROOM");
-                            mConnection.sendTextMessage(request.toString());
-                            Log.d(TAG,"[JANUS] Send Join Msg:"+request.toString());
-                        } else {
-                            Log.d(TAG,"[JANUS_RECV] ATTACH_PLUGIN Fail");
-                            //What to do ?
-                        }
-                    } else if(sendTransactionOrder.equals("JOIN_ROOM")){
-                        if(json.getString("janus").equals("event")){
-                            JSONObject plugindata=json.getJSONObject("plugindata");
-                            JSONObject data=plugindata.getJSONObject("data");
-                            //Step 4. Room에 조인이 성공하면 WebRTC 채널 생성을 시도한다(SDP Offer Send -> SDP Answer Receive, ICE Candidate 전달)
-                            if(data.getString("audiobridge").equals("joined")){
-                                Log.d(TAG,"[JANUS] JOIN_ROOM Success..CreateUserMedia");
-                                //set audio configuration
-                                setAudioProcessing();
-                                //Start Audio
-                                startAudio();
-                                //Create LocalMediaStream
-                                createLocalMediaStream();
-                                //Create PeerConnection
-                                createPeerConnection();
-                                //Create Offer
-                                if (mPeerConnection != null) {
-                                    Log.d(TAG, "[WEBRTC] PC Create OFFER");
-                                    mIsInitiator=true;
-                                    mSDPObserver=new SDPObserver();
-                                    //createOffer하게 되면 mSDPObserver에서 SDP를 추출해서 Signal Server로 전송
-                                    mPeerConnection.createOffer(mSDPObserver, mLocalMediaConstrants);
-                                }
-                            } else {
-                                Log.d(TAG,"[JANUS] JOIN_ROOM Fail Msg:"+json.toString());
-                            }
-                        } else if(json.getString("janus").equals("ack")) {
-                            Log.d(TAG,"[JANUS] JOIN_ROOM ack received..");
-                            trxRemoveFlag=false;
-                        } else {
-                            Log.d(TAG,"[JANUS] Unknown Msg:"+json.toString());
-                            //What to do ?
-                        }
-                    } else if(sendTransactionOrder.equals("OFFER")){
-                        //SDP Offer에 대한 JANUS 서버의 SDP ANswer
-                        Log.d(TAG,"[JANUS] OFFER Reply");
-                        if(json.getString("janus").equals("ack")) {
-                            Log.d(TAG,"[JANUS] OFFER Transported..");
-                            trxRemoveFlag=false;
-                        } else  if(json.getString("janus").equals("event")) {
-                            Log.d(TAG,"[JANUS] Maybe Answer is received..");
-                            JSONObject plugindata=json.getJSONObject("plugindata");
-                            JSONObject data=plugindata.getJSONObject("data");
-                            JSONObject jsep=json.getJSONObject("jsep");
-                            if(data.getString("result").equals("ok")){
-                                if(jsep!=null && jsep.getString("type").equals("answer")){
-                                    Log.d(TAG,"[JANUS] Type Answer..Set Remote Descriptor..sdp:"+jsep.getString("sdp"));
-                                    mIsInitiator=false;
-                                    SessionDescription sdpAnswer = new SessionDescription(SessionDescription.Type.fromCanonicalForm("answer"), jsep.getString("sdp"));
-                                    mPeerConnection.setRemoteDescription(mSDPObserver,sdpAnswer);
-                                    mOfferReceived=true;
-                                    Log.d(TAG,"[JANUS] Reserved ICE:"+queuedLocalCandidates.size());
-                                    while(!queuedLocalCandidates.isEmpty()){
-                                        IceCandidate rCandidate=queuedLocalCandidates.remove();
-                                        Log.d(TAG,"Send Reserved onIceCandidate event");
-                                        JSONObject request=new JSONObject();
-                                        String iceCandidateTrx=getTrxId();
-                                        try {
-                                            request.put("janus", "trickle");
-                                            request.put("session_id",mJanusSessionId);
-                                            request.put("handle_id",mJanusHandleId);
-                                            request.put("transaction",iceCandidateTrx);
-                                            JSONObject candidate=new JSONObject();
-                                            candidate.put("candidate",rCandidate.sdp);
-                                            candidate.put("sdpMid",rCandidate.sdpMid);
-                                            candidate.put("sdpMLineIndex",rCandidate.sdpMLineIndex);
-                                            request.put("candidate",candidate);
-                                            Log.d(TAG, "[JANUS_SEND] Send icecandidate msg :"+request.toString());
-                                            mTransactionQueue.put(iceCandidateTrx,"SEND_ICE");
-                                            mConnection.sendTextMessage(request.toString());
-                                        } catch (Exception e){
-                                            Log.d(TAG, "[JANUS_SEND] Exception when sending icecandidate msg :"+e.getMessage());
-                                        }
-                                    }
-                                }
-                            }
-                        }  else {
-                            Log.d(TAG,"[JANUS] Unknown Msg:"+json.toString());
-                            //What to do ?
-                        }
-                    } else if(sendTransactionOrder.equals("SEND_ICE")){
-                        Log.d(TAG,"[JANUS] SEND_ICE Transported..");
-                    }
-                    if(trxRemoveFlag) mTransactionQueue.remove(recvTransactionId);
-                } else {
-
-                    String janus=json.getString("janus");
-
-                    if(janus.equals("webrtcup")){
-                        //WebRTC is ready.
-                        Log.d(TAG, "[JANUS] WebRTC is READY!");
-                    } else if(janus.equals("media")){
-                        //JANUS가 media를 받는 것에 대한 정보
-                        Log.d(TAG, "[JANUS] Media Up Janus is receiving "+json.getString("type")+" enabled:"+json.getBoolean("receiving"));
-                    } else if (janus.equals("slowlink")) {
-                        //Janus reporting problems sending media to a user (user sent many NACKs in the last second; uplink=true is from Janus' perspective):
-                        Log.d(TAG, "[JANUS] slowlink is reporting uplink:"+json.getBoolean("uplink")+" nacks:"+json.getString("nacks"));
-                    } else if(janus.equals("hangup")){
-                        //PeerConnection closed for a DTLS alert (normal shutdown):
-                        Log.d(TAG, "[JANUS] WebRTC is closed.");
-                    } else if(janus.equals("event")){
-                        Log.d(TAG, "[JANUS]Server Side event is received.");
-                        //plugin에서 발생한 이벤트들로, 개별 파싱 필요
-                        //audiobridge의 경우
-                        //plugindata
-                        //  plugin:"janus.plugin.audiobridge"
-                        //  data:
-                        //      audiobridge:event
-                        //      room:
-                        //      participants 또는 leaving
-                        //      JANUS의 경우 API가 일관성이 없음..API 서버에서 Wrapping 해야 할듯 함
-                    }
-                }
+    @Override
+    public void onAttachPluginReply(boolean isSuccess, Exception ex) {
+        if(isSuccess){
+            Log.d(TAG,"4. attach janus.plugin.audiobridge success. start_keepalive");
+            mJanusProtocol.startKeepAlive();
+            Log.d(TAG,"5. join room janus.plugin.audiobridge");
+            try{
+                JSONObject body=new JSONObject();
+                body.put("request","join");
+                body.put("id",Integer.parseInt(mRoomIdText.getText().toString()));
+                body.put("display","Hello Android");
+                mJanusProtocol.sendPluginMsg("janus.plugin.audiobridge",body);
             } catch (Exception e){
-                Log.d(TAG,"WebSocket Data Parsing Error:"+e.getMessage());
+                Log.d(TAG,"onAttachPluginReply Error:"+e.getMessage());
             }
         }
-        @Override
-        public void onRawTextMessage(byte[] payload) {}
+    }
 
-        @Override
-        public void onBinaryMessage(byte[] payload) {}
+    @Override
+    public void onPluginEvent(JSONObject msg) {
+        try {
+            JSONObject plugin_data=msg.getJSONObject("plugindata");
+            if(plugin_data.getString("plugin").equals("janus.plugin.audiobridge")){
+                JSONObject data=msg.getJSONObject("data");
+                if(data.getString("audiobridge").equals("joined")){
+                    Log.d(TAG,"6. join room janus.plugin.audiobridge success. getUserMedia");
+                    setAudioProcessing();
+                    startAudio();
+                    createLocalMediaStream();
+                    Log.d(TAG,"7. Creating PeerConnection");
+                    createPeerConnection();
+                    if(mPeerConnection!=null){
+                        Log.d(TAG,"8. Created SDP offer");
+                        mIsInitiator=true;
+                        mSDPObserver=new SDPObserver();
+                        mPeerConnection.createOffer(mSDPObserver,mLocalMediaConstrants);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.d(TAG,"onPluginEvent Error:"+e.getMessage());
+        }
+    }
+
+    @Override
+    public void onError(String order, JSONObject msg) {
+        Log.d(TAG,"Error Received Order:"+order+" msg:"+msg.toString());
     }
 
     //A Class for observing SDP Change
@@ -617,20 +421,10 @@ public class MainActivity extends AppCompatActivity {
                                 JSONObject jsep=new JSONObject();
                                 jsep.put("type",localSdp.type);
                                 jsep.put("sdp",localSdp.description);
-                                String sendOfferTransaction=getTrxId();
-                                JSONObject request=new JSONObject();
-                                request.put("janus","message");
-                                request.put("transaction",sendOfferTransaction);
-                                request.put("session_id",mJanusSessionId);
-                                request.put("handle_id",mJanusHandleId);
                                 JSONObject body=new JSONObject();
                                 body.put("request","configure");
                                 body.put("muted",false);
-                                request.put("body",body);
-                                request.put("jsep",jsep);
-                                Log.d(TAG, "[JANUS_SEND] Send sdpOffer msg :"+request.toString());
-                                mTransactionQueue.put(sendOfferTransaction,"OFFER");
-                                mConnection.sendTextMessage(request.toString());
+                                mJanusProtocol.sendPluginMsg("janus.plugin.audiobridge",body);
                             } catch (Exception e){
                                 Log.d(TAG,"Exception occured when send sdpoffer:"+e.getMessage());
                             }
@@ -683,32 +477,13 @@ public class MainActivity extends AppCompatActivity {
         public void onIceCandidate(IceCandidate iceCandidate) {
             //This is called when local IceCandidate is occured.
             Log.d(TAG,"Local onIceCandidate event");
-            if(mOfferReceived) {
-                Log.d(TAG,"onIceCandidate event");
-                JSONObject request=new JSONObject();
-                String iceCandidateTrx=getTrxId();
-                try {
-                    request.put("janus", "trickle");
-                    request.put("session_id",mJanusSessionId);
-                    request.put("handle_id",mJanusHandleId);
-                    request.put("candidate",iceCandidate.sdp);
-                    request.put("transaction",iceCandidateTrx);
-                    Log.d(TAG, "[JANUS_SEND] Send icecandidate msg :"+request.toString());
-                    mTransactionQueue.put(iceCandidateTrx,"SEND_ICE");
-                    mConnection.sendTextMessage(request.toString());
-                } catch (Exception e){
-                    Log.d(TAG, "[JANUS_SEND] Exception when sending icecandidate msg :"+e.getMessage());
-                }
-            } else {
-                queuedLocalCandidates.add(iceCandidate);
-            }
-        }
+            mJanusProtocol.sendTricle("janus.plugin.audiobridge",iceCandidate.sdp);
 
+        }
         @Override
         public void onIceCandidatesRemoved(IceCandidate[] iceCandidates) {
 
         }
-
         @Override
         public void onAddStream(MediaStream mediaStream) {
             Log.d(TAG,"onAddStream event");
@@ -830,15 +605,5 @@ public class MainActivity extends AppCompatActivity {
             }
             queuedRemoteCandidates = null;
         }
-    }
-
-    private String getTrxId(){
-        String charSet="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-        String randomString="";
-        for(int i=0;i<12;i++){
-            int randomPoz=(int)Math.floor(Math.random()*charSet.length());
-            randomString=randomString+charSet.substring(randomPoz,randomPoz+1);
-        }
-        return randomString;
     }
 }

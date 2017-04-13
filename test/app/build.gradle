@@ -1,33 +1,10 @@
-buildscript {
-    repositories {
-        jcenter()
-    }
-    dependencies {
-        classpath 'com.android.tools.build:gradle:2.3.0'
-
-        // NOTE: Do not place your application dependencies here; they belong
-        // in the individual module build.gradle files
-    }
-}
-
-allprojects {
-    repositories {
-        jcenter()
-    }
-}
-
-
 apply plugin: 'com.android.application'
 
 android {
     compileSdkVersion 25
     buildToolsVersion "25.0.2"
-    sourceSets.main{
-        jniLibs.srcDir 'libs'
-        jni.srcDirs=[]
-    }
     defaultConfig {
-        applicationId "alnova2.janus_gateway_android_audiobridge"
+        applicationId "com.example.alnova2.test"
         minSdkVersion 16
         targetSdkVersion 25
         versionCode 1
@@ -49,9 +26,5 @@ dependencies {
     })
     compile 'com.android.support:appcompat-v7:25.3.1'
     compile 'com.android.support.constraint:constraint-layout:1.0.2'
-    compile files('libs/base_java.jar')
-    compile files('libs/audio_device_java.jar')
-    compile files('libs/autobanh.jar')
-    compile files('libs/libjingle_peerconnection_java.jar')
     testCompile 'junit:junit:4.12'
 }
