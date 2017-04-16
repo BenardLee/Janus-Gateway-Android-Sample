@@ -3,6 +3,7 @@ package alnova2.janus_gateway_android_audiobridge;
 import android.util.Log;
 
 import org.json.JSONObject;
+import org.webrtc.IceCandidate;
 
 import java.net.URI;
 import java.util.HashMap;
@@ -72,7 +73,13 @@ public class JanusProtocol implements WebSocket.WebSocketConnectionObserver {
             request.put("opaqueId",opaque_id);
             request.put("session_id",mSessionId);
             request.put("plugin",plugin_name);
-            return sendWSMsg("attach",request);
+            String trxId=getTrxId();
+            request.put("transaction",trxId);
+            mTransactions.put(trxId,"attach");
+            mAttachTransaction.put(trxId,plugin_name);
+            mConnection.sendTextMessage(request.toString());
+            Log.d(TAG,"[ANDROID>JANUS] MSG:"+request.toString());
+            return true;
         } catch (Exception e){
             Log.d(TAG, "attachPlugin Error:"+e.getMessage());
             return false;
@@ -84,19 +91,38 @@ public class JanusProtocol implements WebSocket.WebSocketConnectionObserver {
             request.put("janus","message");
             request.put("session_id",mSessionId);
             request.put("handle_id",mHandleIds.get(plugin_names));
+            request.put("body",body);
             return sendWSMsg("attach",request);
         } catch (Exception e){
             Log.d(TAG, "attachPlugin Error:"+e.getMessage());
             return false;
         }
     }
-    public boolean sendTricle(String plugin_name,String candidate){
+    public boolean sendPluginMsgWithJsep(String plugin_names,JSONObject body,JSONObject jsep){
         try{
             JSONObject request=new JSONObject();
-            request.put("janus","tricle");
+            request.put("janus","message");
+            request.put("session_id",mSessionId);
+            request.put("handle_id",mHandleIds.get(plugin_names));
+            request.put("body",body);
+            request.put("jsep",jsep);
+            return sendWSMsg("attach",request);
+        } catch (Exception e){
+            Log.d(TAG, "attachPlugin Error:"+e.getMessage());
+            return false;
+        }
+    }
+    public boolean sendTricle(String plugin_name,IceCandidate candidate){
+        try{
+            JSONObject request=new JSONObject();
+            request.put("janus","trickle");
             request.put("session_id",mSessionId);
             request.put("handle_id",mHandleIds.get(plugin_name));
-            request.put("candidate",candidate);
+            JSONObject candidate_json=new JSONObject();
+            candidate_json.put("sdpMid",candidate.sdpMid);
+            candidate_json.put("sdpMLineIndex",candidate.sdpMLineIndex);
+            candidate_json.put("candidate",candidate.sdp);
+            request.put("candidate",candidate_json);
             return sendWSMsg("tricle",request);
         } catch (Exception e){
             Log.d(TAG, "attachPlugin Error:"+e.getMessage());
@@ -120,6 +146,7 @@ public class JanusProtocol implements WebSocket.WebSocketConnectionObserver {
                 }
             }
         });
+        mKeepAliveThread.start();
         return true;
     }
     private boolean sendWSMsg(String order,JSONObject msg){
@@ -183,6 +210,10 @@ public class JanusProtocol implements WebSocket.WebSocketConnectionObserver {
                     mCallback.onPluginEvent(parsed);
                     break;
                 case "ack":
+                    break;
+                case "webrtcup":
+                    break;
+                case "media":
                     break;
                 default:
             }

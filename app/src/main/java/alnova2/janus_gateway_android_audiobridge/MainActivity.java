@@ -101,6 +101,9 @@ public class MainActivity extends AppCompatActivity implements JanusProtocolCall
     private TimerTask mTimerTask;
     private Timer mTimer;
 
+    private boolean mOfferReceived=false;
+    private ConcurrentLinkedQueue<IceCandidate> queuedLocalCandidates;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
 
@@ -274,8 +277,9 @@ public class MainActivity extends AppCompatActivity implements JanusProtocolCall
     private void createPeerConnection(){
         Log.d(TAG, "Create PeerConnection...");
         queuedRemoteCandidates = new ConcurrentLinkedQueue<>();
+        queuedLocalCandidates = new ConcurrentLinkedQueue<IceCandidate>();
         //Set Turn Server
-        iceServers.add(new PeerConnection.IceServer("turn:172.19.136.204:3478","testusr","test123"));
+        iceServers.add(new PeerConnection.IceServer("stun:stun.l.google.com:19302"));
         PeerConnection.RTCConfiguration rtcConfig = new PeerConnection.RTCConfiguration(iceServers);
         rtcConfig.tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.DISABLED;
         rtcConfig.bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE;
@@ -346,7 +350,7 @@ public class MainActivity extends AppCompatActivity implements JanusProtocolCall
             try{
                 JSONObject body=new JSONObject();
                 body.put("request","join");
-                body.put("id",Integer.parseInt(mRoomIdText.getText().toString()));
+                body.put("room",Integer.parseInt(mRoomIdText.getText().toString()));
                 body.put("display","Hello Android");
                 mJanusProtocol.sendPluginMsg("janus.plugin.audiobridge",body);
             } catch (Exception e){
@@ -360,7 +364,7 @@ public class MainActivity extends AppCompatActivity implements JanusProtocolCall
         try {
             JSONObject plugin_data=msg.getJSONObject("plugindata");
             if(plugin_data.getString("plugin").equals("janus.plugin.audiobridge")){
-                JSONObject data=msg.getJSONObject("data");
+                JSONObject data=plugin_data.getJSONObject("data");
                 if(data.getString("audiobridge").equals("joined")){
                     Log.d(TAG,"6. join room janus.plugin.audiobridge success. getUserMedia");
                     setAudioProcessing();
@@ -373,6 +377,20 @@ public class MainActivity extends AppCompatActivity implements JanusProtocolCall
                         mIsInitiator=true;
                         mSDPObserver=new SDPObserver();
                         mPeerConnection.createOffer(mSDPObserver,mLocalMediaConstrants);
+                    }
+                } else if(data.getString("audiobridge").equals("event")){
+                    if(data.getString("result").equals("ok")){
+                        if(msg.has("jsep")){
+                            mOfferReceived=true;
+                            JSONObject jsep=msg.getJSONObject("jsep");
+                            SessionDescription sdpAnswer = new SessionDescription(SessionDescription.Type.fromCanonicalForm("answer"), jsep.getString("sdp"));
+                            mIsInitiator=false;
+                            mPeerConnection.setRemoteDescription(mSDPObserver,sdpAnswer);
+                            //while(!queuedLocalCandidates.isEmpty()){
+                            //    IceCandidate rCandidate=queuedLocalCandidates.remove();
+                            //    mJanusProtocol.sendTricle("janus.plugin.audiobridge",rCandidate);
+                            //}
+                        }
                     }
                 }
             }
@@ -424,7 +442,7 @@ public class MainActivity extends AppCompatActivity implements JanusProtocolCall
                                 JSONObject body=new JSONObject();
                                 body.put("request","configure");
                                 body.put("muted",false);
-                                mJanusProtocol.sendPluginMsg("janus.plugin.audiobridge",body);
+                                mJanusProtocol.sendPluginMsgWithJsep("janus.plugin.audiobridge",body,jsep);
                             } catch (Exception e){
                                 Log.d(TAG,"Exception occured when send sdpoffer:"+e.getMessage());
                             }
@@ -477,7 +495,9 @@ public class MainActivity extends AppCompatActivity implements JanusProtocolCall
         public void onIceCandidate(IceCandidate iceCandidate) {
             //This is called when local IceCandidate is occured.
             Log.d(TAG,"Local onIceCandidate event");
-            mJanusProtocol.sendTricle("janus.plugin.audiobridge",iceCandidate.sdp);
+            //if(mOfferReceived) mJanusProtocol.sendTricle("janus.plugin.audiobridge",iceCandidate);
+            //else queuedLocalCandidates.add(iceCandidate);
+            mJanusProtocol.sendTricle("janus.plugin.audiobridge",iceCandidate);
 
         }
         @Override
